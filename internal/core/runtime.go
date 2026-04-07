@@ -1,11 +1,10 @@
-package eventbus
+package core
 
 import (
 	"context"
 	"time"
 )
 
-// Runtime 定义事件总线运行时端口。
 type Runtime interface {
 	Publish(ctx context.Context, msg Message) error
 	EnsureConsumerGroup(ctx context.Context, topic, group string) error
@@ -19,4 +18,3 @@ type Runtime interface {
 
 	Close() error
 }
-

@@ -1,20 +1,19 @@
-package eventbus
+package core
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Config 描述 Bus 运行配置。
 type Config struct {
 	RetryPollInterval time.Duration
 }
 
-// Bus 是显式构造的事件总线实例。
 type Bus struct {
 	runtime  Runtime
 	codec    Codec
@@ -28,15 +27,12 @@ type Bus struct {
 	cancel context.CancelFunc
 }
 
-// NewBus 显式构造 Bus 实例。
 func NewBus(rt Runtime, opts ...Option) *Bus {
 	b := &Bus{
 		runtime:  rt,
 		codec:    jsonCodec{},
 		observer: noopObserver{},
-		config: Config{
-			RetryPollInterval: time.Second,
-		},
+		config:   Config{RetryPollInterval: time.Second},
 		registry: make(map[string]ConsumerConfig),
 	}
 	for _, opt := range opts {
@@ -54,7 +50,6 @@ func NewBus(rt Runtime, opts ...Option) *Bus {
 	return b
 }
 
-// Subscribe 注册订阅处理器。
 func (b *Bus) Subscribe(cfg ConsumerConfig) error {
 	if strings.TrimSpace(cfg.Topic) == "" || strings.TrimSpace(cfg.Group) == "" || cfg.Handler == nil {
 		return ErrInvalidConsumerConfig
@@ -71,7 +66,6 @@ func (b *Bus) Subscribe(cfg ConsumerConfig) error {
 	return nil
 }
 
-// Publish 发布 topic 事件。
 func (b *Bus) Publish(ctx context.Context, topic string, payload any, opts ...PublishOption) error {
 	if strings.TrimSpace(topic) == "" {
 		return errors.New("topic is required")
@@ -109,7 +103,6 @@ func (b *Bus) Publish(ctx context.Context, topic string, payload any, opts ...Pu
 	return nil
 }
 
-// Start 启动消费与重试 worker。
 func (b *Bus) Start(ctx context.Context) error {
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -137,7 +130,6 @@ func (b *Bus) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop 停止 worker 并释放 runtime。
 func (b *Bus) Stop() error {
 	b.mu.Lock()
 	if b.cancel != nil {
@@ -309,9 +301,7 @@ func cloneHeaders(headers map[string]string) map[string]string {
 		return nil
 	}
 	cloned := make(map[string]string, len(headers))
-	for k, v := range headers {
-		cloned[k] = v
-	}
+	maps.Copy(cloned, headers)
 	return cloned
 }
 

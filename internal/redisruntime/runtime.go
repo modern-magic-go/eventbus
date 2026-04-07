@@ -1,4 +1,4 @@
-package eventbus
+package redisruntime
 
 import (
 	"context"
@@ -9,10 +9,11 @@ import (
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
+
+	"github.com/CATT-L/go-eventbus/internal/core"
 )
 
-// RedisRuntimeConfig 描述 Redis Runtime 配置。
-type RedisRuntimeConfig struct {
+type Config struct {
 	Namespace       string
 	StreamMaxLen    int64
 	RetryBatchSize  int
@@ -25,25 +26,23 @@ type RedisRuntimeConfig struct {
 	DefaultReadSize int64
 }
 
-// RedisRuntime 是基于 Redis Stream + ZSet + List 的运行时实现。
 type RedisRuntime struct {
 	client *redis.Client
-	cfg    RedisRuntimeConfig
+	cfg    Config
 }
 
-// NewRedisRuntime 构造 Redis 运行时。
-func NewRedisRuntime(client *redis.Client, cfg RedisRuntimeConfig) *RedisRuntime {
+func NewRedisRuntime(client *redis.Client, cfg Config) *RedisRuntime {
 	if cfg.Namespace == "" {
 		cfg.Namespace = "eventbus"
 	}
 	if cfg.RetryBatchSize <= 0 {
-		cfg.RetryBatchSize = DefaultPollBatchSize
+		cfg.RetryBatchSize = core.DefaultPollBatchSize
 	}
 	if cfg.DefaultBlock <= 0 {
-		cfg.DefaultBlock = DefaultPollBlock
+		cfg.DefaultBlock = core.DefaultPollBlock
 	}
 	if cfg.DefaultReadSize <= 0 {
-		cfg.DefaultReadSize = int64(DefaultPollBatchSize)
+		cfg.DefaultReadSize = int64(core.DefaultPollBatchSize)
 	}
 	if cfg.TopicPrefix == "" {
 		cfg.TopicPrefix = "topic"
@@ -58,10 +57,10 @@ func NewRedisRuntime(client *redis.Client, cfg RedisRuntimeConfig) *RedisRuntime
 	return &RedisRuntime{client: client, cfg: cfg}
 }
 
-func (r *RedisRuntime) Publish(ctx context.Context, msg Message) error {
+func (r *RedisRuntime) Publish(ctx context.Context, msg core.Message) error {
 	values := map[string]any{
-		"topic":       msg.Topic,
-		"payload":     msg.Payload,
+		"topic":        msg.Topic,
+		"payload":      msg.Payload,
 		"published_at": msg.PublishedAt.Unix(),
 	}
 	if msg.ID != "" {
@@ -93,7 +92,7 @@ func (r *RedisRuntime) EnsureConsumerGroup(ctx context.Context, topic, group str
 	return nil
 }
 
-func (r *RedisRuntime) Consume(ctx context.Context, cfg ConsumerConfig) ([]Message, error) {
+func (r *RedisRuntime) Consume(ctx context.Context, cfg core.ConsumerConfig) ([]core.Message, error) {
 	consumer := cfg.ConsumerName
 	if consumer == "" {
 		consumer = r.cfg.ConsumerName
@@ -125,7 +124,7 @@ func (r *RedisRuntime) Consume(ctx context.Context, cfg ConsumerConfig) ([]Messa
 		return nil, err
 	}
 
-	messages := make([]Message, 0, len(res))
+	messages := make([]core.Message, 0, len(res))
 	for _, stream := range res {
 		for _, item := range stream.Messages {
 			msg, convErr := r.fromRedisMessage(cfg, item)
@@ -138,34 +137,33 @@ func (r *RedisRuntime) Consume(ctx context.Context, cfg ConsumerConfig) ([]Messa
 	return messages, nil
 }
 
-func (r *RedisRuntime) Ack(ctx context.Context, msg Message) error {
+func (r *RedisRuntime) Ack(ctx context.Context, msg core.Message) error {
 	if msg.DeliveryTag == "" || msg.ConsumerGroup == "" {
 		return nil
 	}
 	return r.client.XAck(ctx, r.topicKey(msg.Topic), msg.ConsumerGroup, msg.DeliveryTag).Err()
 }
 
-func (r *RedisRuntime) ScheduleRetry(ctx context.Context, task RetryTask) error {
+func (r *RedisRuntime) ScheduleRetry(ctx context.Context, task core.RetryTask) error {
 	b, err := json.Marshal(task)
 	if err != nil {
 		return err
 	}
 	member := string(b)
-	return r.client.ZAdd(ctx, r.cfg.RetryQueueKey, redis.Z{
-		Score:  float64(task.AvailableAt.Unix()),
-		Member: member,
-	}).Err()
+	return r.client.ZAdd(ctx, r.cfg.RetryQueueKey, redis.Z{Score: float64(task.AvailableAt.Unix()), Member: member}).Err()
 }
 
-func (r *RedisRuntime) PollRetry(ctx context.Context, limit int, now time.Time) ([]RetryTask, error) {
+func (r *RedisRuntime) PollRetry(ctx context.Context, limit int, now time.Time) ([]core.RetryTask, error) {
 	if limit <= 0 {
 		limit = r.cfg.RetryBatchSize
 	}
-	items, err := r.client.ZRangeByScore(ctx, r.cfg.RetryQueueKey, &redis.ZRangeBy{
-		Min:    "-inf",
-		Max:    fmt.Sprintf("%d", now.Unix()),
-		Offset: 0,
-		Count:  int64(limit),
+	items, err := r.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     r.cfg.RetryQueueKey,
+		Start:   "-inf",
+		Stop:    fmt.Sprintf("%d", now.Unix()),
+		ByScore: true,
+		Offset:  0,
+		Count:   int64(limit),
 	}).Result()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
@@ -174,20 +172,20 @@ func (r *RedisRuntime) PollRetry(ctx context.Context, limit int, now time.Time) 
 		return nil, err
 	}
 
-	tasks := make([]RetryTask, 0, len(items))
+	tasks := make([]core.RetryTask, 0, len(items))
 	for _, item := range items {
-		var task RetryTask
+		var task core.RetryTask
 		if unmarshalErr := json.Unmarshal([]byte(item), &task); unmarshalErr != nil {
 			continue
 		}
-		task.rawMember = item
+		task = core.WithRawMember(task, item)
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
 }
 
-func (r *RedisRuntime) RemoveRetry(ctx context.Context, task RetryTask) error {
-	member := task.rawMember
+func (r *RedisRuntime) RemoveRetry(ctx context.Context, task core.RetryTask) error {
+	member := core.RawMember(task)
 	if member == "" {
 		b, err := json.Marshal(task)
 		if err != nil {
@@ -198,7 +196,7 @@ func (r *RedisRuntime) RemoveRetry(ctx context.Context, task RetryTask) error {
 	return r.client.ZRem(ctx, r.cfg.RetryQueueKey, member).Err()
 }
 
-func (r *RedisRuntime) MoveToDeadLetter(ctx context.Context, msg DeadLetterMessage) error {
+func (r *RedisRuntime) MoveToDeadLetter(ctx context.Context, msg core.DeadLetterMessage) error {
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -214,13 +212,13 @@ func (r *RedisRuntime) topicKey(topic string) string {
 	return fmt.Sprintf("%s:%s:%s", r.cfg.Namespace, r.cfg.TopicPrefix, topic)
 }
 
-func (r *RedisRuntime) fromRedisMessage(cfg ConsumerConfig, x redis.XMessage) (Message, error) {
+func (r *RedisRuntime) fromRedisMessage(cfg core.ConsumerConfig, x redis.XMessage) (core.Message, error) {
 	payload := extractBytes(x.Values["payload"])
 	if payload == nil {
-		return Message{}, errors.New("payload is required")
+		return core.Message{}, errors.New("payload is required")
 	}
 
-	msg := Message{
+	msg := core.Message{
 		ID:            extractString(x.Values["message_id"]),
 		Topic:         cfg.Topic,
 		Payload:       payload,

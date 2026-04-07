@@ -16,6 +16,12 @@ go get github.com/CATT-L/go-eventbus
 
 当前 module 路径为 `github.com/CATT-L/go-eventbus`，发布到对应仓库后，其他项目即可直接 `go get`。
 
+## 目录结构
+
+- 根目录：稳定的对外 API，保持导入路径为 `github.com/CATT-L/go-eventbus`
+- `internal/core/`：事件总线核心实现
+- `internal/redisruntime/`：Redis 运行时实现
+
 ## 快速开始
 
 ```go

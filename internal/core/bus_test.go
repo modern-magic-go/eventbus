@@ -1,4 +1,4 @@
-package eventbus
+package core
 
 import (
 	"context"
@@ -68,7 +68,7 @@ func (f *fakeRuntime) PollRetry(_ context.Context, _ int, now time.Time) ([]Retr
 	remain := make([]RetryTask, 0, len(f.retries))
 	for _, t := range f.retries {
 		if !t.AvailableAt.After(now) {
-			t.rawMember = t.Topic + t.Group
+			t = WithRawMember(t, t.Topic+t.Group)
 			out = append(out, t)
 		} else {
 			remain = append(remain, t)
@@ -113,9 +113,9 @@ func TestBus_RetryAndDLQ(t *testing.T) {
 
 	attempts := 0
 	require.NoError(t, bus.Subscribe(ConsumerConfig{
-		Topic:      "topic.order",
-		Group:      "worker",
-		MaxRetries: 1,
+		Topic:          "topic.order",
+		Group:          "worker",
+		MaxRetries:     1,
 		RetryBaseDelay: 20 * time.Millisecond,
 		Handler: func(_ context.Context, _ Message) error {
 			attempts++

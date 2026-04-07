@@ -1,4 +1,4 @@
-package eventbus
+package redisruntime
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	redis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/CATT-L/go-eventbus/internal/core"
 )
 
 func TestRedisRuntime_PublishConsumeAckRetryDLQ(t *testing.T) {
@@ -17,14 +19,14 @@ func TestRedisRuntime_PublishConsumeAckRetryDLQ(t *testing.T) {
 	defer mr.Close()
 
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	rt := NewRedisRuntime(client, RedisRuntimeConfig{Namespace: "testbus", ConsumerName: "c1"})
+	rt := NewRedisRuntime(client, Config{Namespace: "testbus", ConsumerName: "c1"})
 	ctx := context.Background()
 
-	msg := Message{Topic: "order.created", Payload: []byte(`{"id":1}`), PublishedAt: time.Now()}
+	msg := core.Message{Topic: "order.created", Payload: []byte(`{"id":1}`), PublishedAt: time.Now()}
 	require.NoError(t, rt.Publish(ctx, msg))
 
 	require.NoError(t, rt.EnsureConsumerGroup(ctx, "order.created", "g1"))
-	items, err := rt.Consume(ctx, ConsumerConfig{Topic: "order.created", Group: "g1", PollBatchSize: 1, PollBlock: 10 * time.Millisecond})
+	items, err := rt.Consume(ctx, core.ConsumerConfig{Topic: "order.created", Group: "g1", PollBatchSize: 1, PollBlock: 10 * time.Millisecond})
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.NoError(t, rt.Ack(ctx, items[0]))
@@ -33,7 +35,7 @@ func TestRedisRuntime_PublishConsumeAckRetryDLQ(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), pending.Count)
 
-	task := RetryTask{
+	task := core.RetryTask{
 		Topic:       "order.created",
 		Group:       "g1",
 		Payload:     []byte(`{"id":1}`),
@@ -48,7 +50,7 @@ func TestRedisRuntime_PublishConsumeAckRetryDLQ(t *testing.T) {
 	require.Len(t, retries, 1)
 	require.NoError(t, rt.RemoveRetry(ctx, retries[0]))
 
-	dlq := DeadLetterMessage{
+	dlq := core.DeadLetterMessage{
 		Topic:      "order.created",
 		Group:      "g1",
 		Payload:    []byte(`{"id":1}`),
@@ -63,4 +65,3 @@ func TestRedisRuntime_PublishConsumeAckRetryDLQ(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), length)
 }
-
