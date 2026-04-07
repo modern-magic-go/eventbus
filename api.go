@@ -48,6 +48,10 @@ func WithRetryPollInterval(interval time.Duration) Option {
 	return core.WithRetryPollInterval(interval)
 }
 
+func WithCloseRuntime(close bool) Option {
+	return core.WithCloseRuntime(close)
+}
+
 func WithMessageID(id string) PublishOption {
 	return core.WithMessageID(id)
 }

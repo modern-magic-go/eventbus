@@ -8,10 +8,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/CATT-L/go-eventbus/internal/snowflake"
 )
 
 type Config struct {
 	RetryPollInterval time.Duration
+	CloseRuntime      bool
 }
 
 type Bus struct {
@@ -76,6 +79,11 @@ func (b *Bus) Publish(ctx context.Context, topic string, payload any, opts ...Pu
 		opt(&po)
 	}
 
+	msgID := po.MessageID
+	if msgID == "" {
+		msgID = generateMessageID()
+	}
+
 	var raw []byte
 	switch v := payload.(type) {
 	case []byte:
@@ -89,7 +97,7 @@ func (b *Bus) Publish(ctx context.Context, topic string, payload any, opts ...Pu
 	}
 
 	msg := Message{
-		ID:          po.MessageID,
+		ID:          msgID,
 		Topic:       topic,
 		Payload:     raw,
 		Headers:     cloneHeaders(po.Headers),
@@ -131,14 +139,32 @@ func (b *Bus) Start(ctx context.Context) error {
 }
 
 func (b *Bus) Stop() error {
+	return b.StopWithTimeout(30 * time.Second)
+}
+
+func (b *Bus) StopWithTimeout(timeout time.Duration) error {
 	b.mu.Lock()
 	if b.cancel != nil {
 		b.cancel()
 		b.cancel = nil
 	}
 	b.mu.Unlock()
-	b.wg.Wait()
-	return b.runtime.Close()
+
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+
+	if b.config.CloseRuntime {
+		return b.runtime.Close()
+	}
+	return nil
 }
 
 func (b *Bus) runConsumer(ctx context.Context, cfg ConsumerConfig) {
@@ -161,9 +187,8 @@ func (b *Bus) runConsumer(ctx context.Context, cfg ConsumerConfig) {
 			if handleErr != nil {
 				b.observer.OnHandleFailed(ctx, msg, handleErr)
 				_ = b.handleFailure(ctx, cfg, msg, handleErr)
-			}
-			_ = b.runtime.Ack(ctx, msg)
-			if handleErr == nil {
+			} else {
+				_ = b.runtime.Ack(ctx, msg)
 				b.observer.OnHandled(ctx, msg)
 			}
 		}
@@ -314,4 +339,8 @@ func backoffDelay(base time.Duration, attempt int) time.Duration {
 		delay *= 2
 	}
 	return delay
+}
+
+func generateMessageID() string {
+	return snowflake.Generate()
 }

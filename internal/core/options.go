@@ -27,3 +27,9 @@ func WithRetryPollInterval(interval time.Duration) Option {
 		}
 	}
 }
+
+func WithCloseRuntime(close bool) Option {
+	return func(b *Bus) {
+		b.config.CloseRuntime = close
+	}
+}
