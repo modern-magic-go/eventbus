@@ -3,7 +3,7 @@ package eventbus
 import (
 	"time"
 
-	"github.com/CATT-L/go-eventbus/internal/core"
+	"github.com/modern-magic-go/eventbus/internal/core"
 )
 
 const (

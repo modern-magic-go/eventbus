@@ -10,7 +10,7 @@ import (
 
 	redis "github.com/redis/go-redis/v9"
 
-	"github.com/CATT-L/go-eventbus/internal/core"
+	"github.com/modern-magic-go/eventbus/internal/core"
 )
 
 type Config struct {

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/CATT-L/go-eventbus/internal/core"
+	"github.com/modern-magic-go/eventbus/internal/core"
 )
 
 func TestRedisRuntime_PublishConsumeAckRetryDLQ(t *testing.T) {

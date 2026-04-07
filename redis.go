@@ -3,7 +3,7 @@ package eventbus
 import (
 	redis "github.com/redis/go-redis/v9"
 
-	"github.com/CATT-L/go-eventbus/internal/redisruntime"
+	"github.com/modern-magic-go/eventbus/internal/redisruntime"
 )
 
 type RedisRuntime = redisruntime.RedisRuntime

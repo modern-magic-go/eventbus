@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CATT-L/go-eventbus/internal/snowflake"
+	"github.com/modern-magic-go/eventbus/internal/snowflake"
 )
 
 type Config struct {

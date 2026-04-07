@@ -1,4 +1,4 @@
-module github.com/CATT-L/go-eventbus
+module github.com/modern-magic-go/eventbus
 
 go 1.24.10
 
