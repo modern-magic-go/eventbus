@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-计划随 v0.3.0 发布，对应 [issue #1](https://github.com/modern-magic-go/eventbus/issues/1) 剩余的 P1/P2 项、[issue #3](https://github.com/modern-magic-go/eventbus/issues/3)（header 契约建议）与 [issue #4](https://github.com/modern-magic-go/eventbus/issues/4)（PEL / 重试存储可靠性）。
+## [0.3.0] - 2026-11-18
+
+对应 [issue #1](https://github.com/modern-magic-go/eventbus/issues/1) 剩余的 P1/P2 项、[issue #3](https://github.com/modern-magic-go/eventbus/issues/3)（header 契约建议）与 [issue #4](https://github.com/modern-magic-go/eventbus/issues/4)（PEL / 重试存储可靠性）。本版本同时发布 `otel/v0.3.0` 与 `prometheus/v0.3.0` 两个嵌套 module。
 
 ### Added
 - `ConsumerConfig.RetryMaxDelay`：指数退避上限，默认 `DefaultRetryMaxDelay`（5m）
