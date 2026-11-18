@@ -11,22 +11,29 @@ const (
 	DefaultPollBatchSize  = core.DefaultPollBatchSize
 	DefaultPollBlock      = core.DefaultPollBlock
 	DefaultRetryBaseDelay = core.DefaultRetryBaseDelay
+
+	DefaultReclaimMinIdle  = core.DefaultReclaimMinIdle
+	DefaultReclaimInterval = core.DefaultReclaimInterval
 )
 
 var (
-	ErrInvalidConsumerConfig = core.ErrInvalidConsumerConfig
-	ErrDuplicateSubscription = core.ErrDuplicateSubscription
+	ErrInvalidConsumerConfig     = core.ErrInvalidConsumerConfig
+	ErrDuplicateSubscription     = core.ErrDuplicateSubscription
+	ErrHandlerPanic              = core.ErrHandlerPanic
+	ErrPendingReclaimUnsupported = core.ErrPendingReclaimUnsupported
 )
 
 type Config = core.Config
 type Bus = core.Bus
 type Codec = core.Codec
 type Runtime = core.Runtime
+type PendingReclaimer = core.PendingReclaimer
 type Observer = core.Observer
 type Option = core.Option
 type Message = core.Message
 type Handler = core.Handler
 type ConsumerConfig = core.ConsumerConfig
+type PendingReclaimConfig = core.PendingReclaimConfig
 type RetryTask = core.RetryTask
 type DeadLetterMessage = core.DeadLetterMessage
 type PublishOptions = core.PublishOptions

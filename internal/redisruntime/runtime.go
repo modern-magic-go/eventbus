@@ -2,9 +2,13 @@ package redisruntime
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +16,11 @@ import (
 
 	"github.com/modern-magic-go/eventbus/internal/core"
 )
+
+// maxClaimScanIterations 限制单次 ClaimPending 的 XAUTOCLAIM 调用次数，
+// 避免异常 PEL 形态导致单轮扫描时间过长。每轮最多扫描
+// maxClaimScanIterations * Batch * 10 个 PEL 条目。
+const maxClaimScanIterations = 1000
 
 type Config struct {
 	Namespace       string
@@ -53,8 +62,28 @@ func NewRedisRuntime(client *redis.Client, cfg Config) *RedisRuntime {
 	if cfg.DeadLetterKey == "" {
 		cfg.DeadLetterKey = cfg.Namespace + ":dlq"
 	}
+	// consumer name 必须稳定：每次 Consume 换随机名会产生大量“僵尸消费者”，
+	// 并让 PEL 里的 pending 消息归属难以追踪。这里在构造时生成一次。
+	if cfg.ConsumerName == "" {
+		cfg.ConsumerName = defaultConsumerName()
+	}
 
 	return &RedisRuntime{client: client, cfg: cfg}
+}
+
+func defaultConsumerName() string {
+	suffix := make([]byte, 4)
+	if _, err := rand.Read(suffix); err != nil {
+		return fmt.Sprintf("eventbus-%d", os.Getpid())
+	}
+	return fmt.Sprintf("eventbus-%d-%s", os.Getpid(), hex.EncodeToString(suffix))
+}
+
+func (r *RedisRuntime) consumerName(cfg core.ConsumerConfig) string {
+	if cfg.ConsumerName != "" {
+		return cfg.ConsumerName
+	}
+	return r.cfg.ConsumerName
 }
 
 func (r *RedisRuntime) Publish(ctx context.Context, msg core.Message) error {
@@ -93,13 +122,7 @@ func (r *RedisRuntime) EnsureConsumerGroup(ctx context.Context, topic, group str
 }
 
 func (r *RedisRuntime) Consume(ctx context.Context, cfg core.ConsumerConfig) ([]core.Message, error) {
-	consumer := cfg.ConsumerName
-	if consumer == "" {
-		consumer = r.cfg.ConsumerName
-	}
-	if consumer == "" {
-		consumer = fmt.Sprintf("%s-%d", cfg.Group, time.Now().UnixNano())
-	}
+	consumer := r.consumerName(cfg)
 
 	batchSize := int64(cfg.PollBatchSize)
 	if batchSize <= 0 {
@@ -133,6 +156,65 @@ func (r *RedisRuntime) Consume(ctx context.Context, cfg core.ConsumerConfig) ([]
 			}
 			messages = append(messages, msg)
 		}
+	}
+	return messages, nil
+}
+
+// ClaimPending 认领消费组 PEL 中空闲超过 MinIdle 的消息（XAUTOCLAIM，Redis 6.2+）。
+//
+// 从 "0-0" 开始按 XAUTOCLAIM 返回的 next cursor 连续扫描，直到：
+//   - 本批已认领满 Batch 条；或
+//   - 扫描到 PEL 末尾（next cursor 回到 "0-0"）。
+//
+// 必须使用 cursor 推进而不是每次固定 "0-0"：Redis 单次 XAUTOCLAIM 最多扫描
+// count*10 个 PEL 条目，若 PEL 头部存在大量 idle 未达 MinIdle 的条目，
+// 固定 "0-0" 会反复扫描头部、永远看不到尾部可认领消息。
+//
+// 刚被认领的消息 idle 会重置，因此本轮内不会被重复认领；已 Ack 的消息会从 PEL 删除。
+func (r *RedisRuntime) ClaimPending(ctx context.Context, cfg core.ConsumerConfig) ([]core.Message, error) {
+	minIdle := cfg.PendingReclaim.MinIdle
+	if minIdle <= 0 {
+		minIdle = core.DefaultReclaimMinIdle
+	}
+	batchSize := int64(cfg.PendingReclaim.Batch)
+	if batchSize <= 0 {
+		batchSize = core.DefaultPollBatchSize
+	}
+
+	messages := make([]core.Message, 0, batchSize)
+	cursor := "0-0"
+	claimed := int64(0)
+
+	for iteration := 0; iteration < maxClaimScanIterations; iteration++ {
+		res, next, err := r.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   r.topicKey(cfg.Topic),
+			Group:    cfg.Group,
+			Consumer: r.consumerName(cfg),
+			MinIdle:  minIdle,
+			Start:    cursor,
+			Count:    batchSize,
+		}).Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				break
+			}
+			return messages, err
+		}
+
+		claimed += int64(len(res))
+		for _, item := range res {
+			msg, convErr := r.fromRedisMessage(cfg, item)
+			if convErr != nil {
+				continue
+			}
+			messages = append(messages, msg)
+		}
+
+		// PEL 扫描完 / 本批已认领满 / cursor 不再前进（防御异常实现），结束本轮。
+		if next == "0-0" || next == cursor || claimed >= batchSize {
+			break
+		}
+		cursor = next
 	}
 	return messages, nil
 }
@@ -218,12 +300,19 @@ func (r *RedisRuntime) fromRedisMessage(cfg core.ConsumerConfig, x redis.XMessag
 		return core.Message{}, errors.New("payload is required")
 	}
 
+	publishedAt := time.Now()
+	if raw := extractString(x.Values["published_at"]); raw != "" {
+		if ts, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			publishedAt = time.Unix(ts, 0)
+		}
+	}
+
 	msg := core.Message{
 		ID:            extractString(x.Values["message_id"]),
 		Topic:         cfg.Topic,
 		Payload:       payload,
 		Headers:       extractHeaders(x.Values["headers"]),
-		PublishedAt:   time.Now(),
+		PublishedAt:   publishedAt,
 		ConsumerGroup: cfg.Group,
 		Attempt:       0,
 		MaxRetries:    cfg.MaxRetries,
