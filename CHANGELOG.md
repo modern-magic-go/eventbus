@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-18
+
 对应 [issue #1](https://github.com/modern-magic-go/eventbus/issues/1)（v0.1.1 可靠性 review）的 P0 修复。
 
 ### Added
@@ -38,5 +40,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修正 `Message.PublishedAt` 语义：消费时取 stream 中记录的发布时间，而不是消费时刻（重试路径仍为当前时间；属可观测行为变化）
 - `PollRetry` 使用 `ZRangeArgs` 替代已废弃的 `ZRangeByScore`
 - `cloneHeaders` 使用 `maps.Copy` 替代手动循环
-
-> 本次含消费失败语义变化，建议随 `0.2.0` 发布。
