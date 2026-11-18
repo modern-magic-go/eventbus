@@ -25,8 +25,9 @@ type fakeRuntime struct {
 	claimCalls int
 
 	// events 记录 schedule / ack / dlq 的调用顺序，用于断言“先转移所有权，再 XACK”。
-	events    []string
-	ensureErr error
+	events     []string
+	ensureErr  error
+	consumeErr error
 
 	// 故障注入与写入失败重试相关计数。
 	scheduleErr      error
@@ -34,6 +35,10 @@ type fakeRuntime struct {
 	scheduleCalls    int
 	dlqCalls         int
 	removeRetryCalls int
+	ensureFromCalls  []string
+
+	popErr     error
+	closeCalls int
 }
 
 func newFakeRuntime() *fakeRuntime {
@@ -107,10 +112,79 @@ func (f *fakeRuntime) EnsureConsumerGroup(_ context.Context, topic, group string
 func (f *fakeRuntime) Consume(_ context.Context, cfg ConsumerConfig) ([]Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.consumeErr != nil {
+		return nil, f.consumeErr
+	}
 	key := cfg.Topic + "|" + cfg.Group
 	msgs := f.consumeBySG[key]
 	f.consumeBySG[key] = nil
 	return msgs, nil
+}
+
+func (f *fakeRuntime) setConsumeErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.consumeErr = err
+}
+
+func (f *fakeRuntime) ensureFromStarted() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.ensureFromCalls...)
+}
+
+// EnsureConsumerGroupFrom 让 fakeRuntime 实现 ConsumerGroupInitializer。
+func (f *fakeRuntime) EnsureConsumerGroupFrom(_ context.Context, topic, group, start string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ensureFromCalls = append(f.ensureFromCalls, topic+"|"+group+"|"+start)
+	return f.ensureErr
+}
+
+// DeadLetterStore 实现，用于死信查询/重放单测。
+func (f *fakeRuntime) ListDeadLetters(_ context.Context, offset, limit int) ([]DeadLetterMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(f.dlq) {
+		return nil, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(f.dlq) {
+		end = len(f.dlq)
+	}
+	return append([]DeadLetterMessage(nil), f.dlq[offset:end]...), nil
+}
+
+func (f *fakeRuntime) PopDeadLetters(_ context.Context, limit int) ([]DeadLetterMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if limit <= 0 || limit > len(f.dlq) {
+		limit = len(f.dlq)
+	}
+	out := append([]DeadLetterMessage(nil), f.dlq[:limit]...)
+	f.dlq = append([]DeadLetterMessage(nil), f.dlq[limit:]...)
+	return out, f.popErr
+}
+
+func (f *fakeRuntime) setPopErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.popErr = err
+}
+
+func (f *fakeRuntime) closeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closeCalls
+}
+
+func (f *fakeRuntime) DeadLetterLen(_ context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return int64(len(f.dlq)), nil
 }
 
 // ClaimPending 让 fakeRuntime 实现 PendingReclaimer，便于单测 pending 回收路径。
@@ -179,7 +253,12 @@ func (f *fakeRuntime) MoveToDeadLetter(_ context.Context, msg DeadLetterMessage)
 	return nil
 }
 
-func (f *fakeRuntime) Close() error { return nil }
+func (f *fakeRuntime) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalls++
+	return nil
+}
 
 func TestBus_IsolatedInstances(t *testing.T) {
 	r1 := newFakeRuntime()
@@ -245,6 +324,8 @@ type recordingObserver struct {
 	retries      int
 	deadLetters  int
 	lastFailure  error
+	errorEvents  []ErrorEvent
+	duplicates   int
 }
 
 func (o *recordingObserver) OnPublished(context.Context, Message)            {}
@@ -273,6 +354,30 @@ func (o *recordingObserver) OnDeadLettered(context.Context, DeadLetterMessage) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.deadLetters++
+}
+
+func (o *recordingObserver) OnError(_ context.Context, event ErrorEvent) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.errorEvents = append(o.errorEvents, event)
+}
+
+func (o *recordingObserver) OnDuplicate(context.Context, Message) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.duplicates++
+}
+
+func (o *recordingObserver) errorsSnapshot() []ErrorEvent {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]ErrorEvent(nil), o.errorEvents...)
+}
+
+func (o *recordingObserver) duplicateCount() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.duplicates
 }
 
 func (o *recordingObserver) snapshot() (handled, failed int, lastFailure error) {
@@ -679,9 +784,11 @@ func TestBus_PanicStackIsTruncated(t *testing.T) {
 		recurse(n - 1)
 	}
 
-	err := bus.invokeHandler(context.Background(), func(context.Context, Message) error {
-		recurse(500)
-		return nil
+	err := bus.invokeHandler(context.Background(), ConsumerConfig{
+		Handler: func(context.Context, Message) error {
+			recurse(500)
+			return nil
+		},
 	}, Message{})
 	require.ErrorIs(t, err, ErrHandlerPanic)
 	assert.Contains(t, err.Error(), "stack truncated")

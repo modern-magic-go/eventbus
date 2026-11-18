@@ -1,6 +1,7 @@
 package eventbus
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/modern-magic-go/eventbus/internal/core"
@@ -14,13 +15,27 @@ const (
 
 	DefaultReclaimMinIdle  = core.DefaultReclaimMinIdle
 	DefaultReclaimInterval = core.DefaultReclaimInterval
+	DefaultRetryMaxDelay   = core.DefaultRetryMaxDelay
+	DefaultDedupTTL        = core.DefaultDedupTTL
+
+	StartFromBeginning = core.StartFromBeginning
+	StartFromLatest    = core.StartFromLatest
+
+	// 去重占位状态（自定义 DedupStore 实现需要）。
+	DedupAcquired   = core.DedupAcquired
+	DedupDone       = core.DedupDone
+	DedupInProgress = core.DedupInProgress
 )
 
 var (
-	ErrInvalidConsumerConfig     = core.ErrInvalidConsumerConfig
-	ErrDuplicateSubscription     = core.ErrDuplicateSubscription
-	ErrHandlerPanic              = core.ErrHandlerPanic
-	ErrPendingReclaimUnsupported = core.ErrPendingReclaimUnsupported
+	ErrInvalidConsumerConfig      = core.ErrInvalidConsumerConfig
+	ErrDuplicateSubscription      = core.ErrDuplicateSubscription
+	ErrHandlerPanic               = core.ErrHandlerPanic
+	ErrPendingReclaimUnsupported  = core.ErrPendingReclaimUnsupported
+	ErrInvalidStartFrom           = core.ErrInvalidStartFrom
+	ErrStartFromUnsupported       = core.ErrStartFromUnsupported
+	ErrDeadLetterStoreUnsupported = core.ErrDeadLetterStoreUnsupported
+	ErrStopTimeout                = core.ErrStopTimeout
 )
 
 type Config = core.Config
@@ -34,6 +49,16 @@ type Message = core.Message
 type Handler = core.Handler
 type ConsumerConfig = core.ConsumerConfig
 type PendingReclaimConfig = core.PendingReclaimConfig
+type ConsumerGroupInitializer = core.ConsumerGroupInitializer
+type DeadLetterStore = core.DeadLetterStore
+type RuntimeStats = core.RuntimeStats
+type ErrorEvent = core.ErrorEvent
+type ErrorObserver = core.ErrorObserver
+type DuplicateObserver = core.DuplicateObserver
+type DedupConfig = core.DedupConfig
+type DedupStatus = core.DedupStatus
+type DedupStore = core.DedupStore
+type ReplayResult = core.ReplayResult
 type RetryTask = core.RetryTask
 type DeadLetterMessage = core.DeadLetterMessage
 type PublishOptions = core.PublishOptions
@@ -57,6 +82,19 @@ func WithRetryPollInterval(interval time.Duration) Option {
 
 func WithCloseRuntime(close bool) Option {
 	return core.WithCloseRuntime(close)
+}
+
+func WithLogger(logger *slog.Logger) Option {
+	return core.WithLogger(logger)
+}
+
+func WithDedup(store DedupStore, cfg DedupConfig) Option {
+	return core.WithDedup(store, cfg)
+}
+
+// NewSlogObserver 返回基于标准库 slog 的 Observer，零第三方依赖。
+func NewSlogObserver(logger *slog.Logger) Observer {
+	return core.NewSlogObserver(logger)
 }
 
 func WithMessageID(id string) PublishOption {
