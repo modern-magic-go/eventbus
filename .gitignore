@@ -1,0 +1,2 @@
+# 示例构建产物（go build ./... 会在 examples/basic 下生成同名可执行文件）
+/examples/basic/basic
